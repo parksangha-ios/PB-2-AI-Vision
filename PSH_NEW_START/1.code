@@ -1,1 +1,129 @@
-das
+import cv2 as cv
+import mediapipe as mp
+import glob
+import numpy as np
+
+# MediaPipe 초기화
+mp_hands = mp.solutions.hands
+mp_drawing = mp.solutions.drawing_utils
+
+hands = mp_hands.Hands(max_num_hands=2, min_detection_confidence=0.5, min_tracking_confidence=0.5)
+
+# 슬라이드 이미지 불러오기 및 리사이즈
+img_files = sorted(glob.glob('./images/*.jpg'))  # 슬라이드 경로
+if not img_files:
+    print("슬라이드 이미지가 없습니다.")
+    exit()
+
+current_slide = 0
+total_slides = len(img_files)
+slide_image = cv.imread(img_files[current_slide])
+slide_image = cv.resize(slide_image, (800, 800))
+
+def calculate_distance(point1, point2, frame_width, frame_height):
+    """손가락 사이의 거리 계산"""
+    x1, y1 = int(point1.x * frame_width), int(point1.y * frame_height)
+    x2, y2 = int(point2.x * frame_width), int(point2.y * frame_height)
+    return np.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
+
+def detect_pointer_mode(hand_landmarks, frame_width, frame_height):
+    """포인터 모드 감지: 검지만 펴져 있고 엄지와 검지가 떨어져 있을 때"""
+    # 손가락 랜드마크
+    index_tip = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP]
+    middle_tip = hand_landmarks.landmark[mp_hands.HandLandmark.MIDDLE_FINGER_TIP]
+    ring_tip = hand_landmarks.landmark[mp_hands.HandLandmark.RING_FINGER_TIP]
+    pinky_tip = hand_landmarks.landmark[mp_hands.HandLandmark.PINKY_TIP]
+    thumb_tip = hand_landmarks.landmark[mp_hands.HandLandmark.THUMB_TIP]
+
+    index_pip = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_PIP]
+    middle_pip = hand_landmarks.landmark[mp_hands.HandLandmark.MIDDLE_FINGER_PIP]
+    ring_pip = hand_landmarks.landmark[mp_hands.HandLandmark.RING_FINGER_PIP]
+    pinky_pip = hand_landmarks.landmark[mp_hands.HandLandmark.PINKY_PIP]
+    thumb_ip = hand_landmarks.landmark[mp_hands.HandLandmark.THUMB_IP]
+
+    # 검지 펴짐 여부 확인
+    index_extended = index_tip.y < index_pip.y
+    # 나머지 손가락 접힘 여부 확인
+    middle_folded = middle_tip.y > middle_pip.y
+    ring_folded = ring_tip.y > ring_pip.y
+    pinky_folded = pinky_tip.y > pinky_pip.y
+    # 엄지와 검지가 떨어져 있는지 확인
+    thumb_index_distance = calculate_distance(thumb_tip, index_tip, frame_width, frame_height)
+
+    return (index_extended and middle_folded and ring_folded and pinky_folded and thumb_index_distance > 50)
+
+cap = cv.VideoCapture(0)
+
+# 꼬집기 동작 상태 추적 변수 초기화
+pinch_active = False
+pinch_start_x = None
+
+while cap.isOpened():
+    ret, frame = cap.read()
+    if not ret:
+        break
+
+    frame = cv.flip(frame, 1)
+    frame = cv.resize(frame, (800, 800))
+    frame_rgb = cv.cvtColor(frame, cv.COLOR_BGR2RGB)
+    result = hands.process(frame_rgb)
+    frame_height, frame_width, _ = frame.shape
+
+    slide_image_copy = slide_image.copy()
+
+    if result.multi_hand_landmarks:
+        for hand_landmarks in result.multi_hand_landmarks:
+            mp_drawing.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+
+            # 손가락 위치
+            index_finger_tip = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP]
+            thumb_tip = hand_landmarks.landmark[mp_hands.HandLandmark.THUMB_TIP]
+
+            # 엄지와 검지 사이 거리 계산
+            thumb_index_distance = calculate_distance(thumb_tip, index_finger_tip, frame_width, frame_height)
+
+            # 1. Pointer 모드
+            if detect_pointer_mode(hand_landmarks, frame_width, frame_height):
+                pointer_position = (int(index_finger_tip.x * slide_image.shape[1]),
+                                    int(index_finger_tip.y * slide_image.shape[0]))
+                cv.circle(slide_image_copy, pointer_position, 5, (0, 0, 255), -1)
+                cv.putText(frame, 'Pointer Active', (10, 50), cv.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                pinch_active = False  # 포인터 모드에서는 꼬집기 비활성화
+
+            # 2. Slide Navigation 모드
+            elif thumb_index_distance < 50:
+                if not pinch_active:
+                    # 꼬집기 시작
+                    pinch_active = True
+                    pinch_start_x = int(index_finger_tip.x * frame_width)
+                else:
+                    # 꼬집기 상태에서 이동 감지
+                    current_x = int(index_finger_tip.x * frame_width)
+                    dx = current_x - pinch_start_x
+                    if abs(dx) > 50:  # 이동 임계값 설정
+                        if dx > 0 and current_slide < total_slides - 1:
+                            current_slide += 1
+                            slide_image = cv.imread(img_files[current_slide])
+                            slide_image = cv.resize(slide_image, (800, 800))
+                            cv.putText(frame, 'Next Slide', (10, 100), cv.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+                        elif dx < 0 and current_slide > 0:
+                            current_slide -= 1
+                            slide_image = cv.imread(img_files[current_slide])
+                            slide_image = cv.resize(slide_image, (800, 800))
+                            cv.putText(frame, 'Previous Slide', (10, 100), cv.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                        pinch_active = False  # 슬라이드 변경 후 꼬집기 상태 리셋
+            else:
+                # 포인터 모드나 슬라이더 모드가 아닌 경우 꼬집기 상태 초기화
+                pinch_active = False
+                pinch_start_x = None
+
+    # 슬라이드와 웹캠 영상 표시
+    cv.imshow('Lecture Slide', slide_image_copy)
+    cv.imshow('Webcam View', frame)
+
+    key = cv.waitKey(1) & 0xFF
+    if key == ord('q'):
+        break
+
+cap.release()
+cv.destroyAllWindows()
