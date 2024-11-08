@@ -1,0 +1,78 @@
+import cv2
+import mediapipe as mp
+import math
+import time  # 스탑워치 기능을 위한 time 모듈 추가
+
+cap = cv2.VideoCapture(0)
+
+mpHands = mp.solutions.hands
+my_hands = mpHands.Hands()
+mpDraw = mp.solutions.drawing_utils
+
+def dist(x1, y1, x2, y2):
+    return math.sqrt(math.pow(x1 - x2, 2) + math.pow(y1 - y2, 2))
+
+compareIndex = [[18, 4], [6, 8], [10, 12], [14, 16], [18, 20]]
+open = [False, False, False, False, False]
+gesture = [
+    [True, True, True, True, True, "Hi!"],
+    [False, True, True, False, False, "Yeah!"],
+    [True, True, False, False, True, "SpiderMan!"]
+]
+
+# 스탑워치 변수 초기화
+start_time = None
+elapsed_time = 0
+running = False
+
+while True:
+    success, img = cap.read()
+    h, w, c = img.shape
+    imgRGB = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    results = my_hands.process(imgRGB)
+    
+    if results.multi_hand_landmarks:
+        for handLms in results.multi_hand_landmarks:
+            for i in range(0, 5):
+                open[i] = dist(handLms.landmark[0].x, handLms.landmark[0].y,
+                               handLms.landmark[compareIndex[i][0]].x, handLms.landmark[compareIndex[i][0]].y) < \
+                           dist(handLms.landmark[0].x, handLms.landmark[0].y,
+                               handLms.landmark[compareIndex[i][1]].x, handLms.landmark[compareIndex[i][1]].y)
+            
+            # 손모양 감지
+            print(open)
+            text_x = (handLms.landmark[0].x * w)
+            text_y = (handLms.landmark[0].y * h)
+
+            for t in range(0, len(gesture)):
+                flag = True
+                for j in range(0, 5):
+                    if (gesture[t][j] != open[j]):
+                        flag = False
+                if flag == True:
+                    cv2.putText(img, gesture[t][5], (round(text_x) - 50, round(text_y) - 250),
+                                cv2.FONT_HERSHEY_PLAIN, 4, (0, 0, 0), 4)
+
+                    # "Hi!" 손모양을 인식했을 때 스탑워치 실행
+                    if gesture[t][5] == "Hi!":
+                        if not running:  # 스탑워치가 실행되지 않은 경우
+                            start_time = time.time()  # 스탑워치 시작
+                            running = True
+                        else:
+                            elapsed_time = time.time() - start_time  # 경과 시간 계산
+                            minutes = int(elapsed_time // 60)
+                            seconds = int(elapsed_time % 60)
+                            # 좌측 상단에 시간 표시
+                            cv2.putText(img, f"Time: {minutes:02}:{seconds:02}", 
+                                        (10, 50),  # 좌측 상단 위치
+                                        cv2.FONT_HERSHEY_PLAIN, 4, (0, 0, 0), 4)
+
+            mpDraw.draw_landmarks(img, handLms, mpHands.HAND_CONNECTIONS)
+
+    # 'q' 키를 눌렀을 때 종료
+    cv2.imshow("HandTracking", img)
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+cap.release()
+cv2.destroyAllWindows()
