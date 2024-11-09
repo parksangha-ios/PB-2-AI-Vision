@@ -1,1 +1,106 @@
-다 하면 올려줘 
+import cv2
+import sys
+import mediapipe as mp
+import time
+import math
+import numpy as np
+
+def distance(p1, p2):
+    return math.dist((p1.x, p1.y), (p2.x, p2.y))
+
+mp_drawing = mp.solutions.drawing_utils
+mp_drawing_styles = mp.solutions.drawing_styles
+mp_hands = mp.solutions.hands
+
+cap = cv2.VideoCapture(0)
+image_path = 'lecture.png'
+img = cv2.imread("lecture.png")
+
+def resize_to_match(frame, img):
+    frame_height, frame_width = frame.shape[:2]
+    img_resized = cv2.resize(img, (frame_width, frame_height))
+    return img_resized
+
+hands = mp_hands.Hands(max_num_hands=1)
+
+total_time = 10  # 빠른 전환을 보기 위해 쉬는시간 10초로 설정했음
+timer_running = False
+start_time = None
+
+while cap.isOpened():
+    ret, frame = cap.read()
+    if not ret:
+        print("Failed to capture video")
+        break
+
+    frame = cv2.flip(frame, 1)
+
+    image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB) 
+    results = hands.process(image)
+
+    hand_shape = ""
+    if results.multi_hand_landmarks:  # 손이 인식되었는지 확인
+        hand_landmarks = results.multi_hand_landmarks[0]  # 1개의 손만 인식하므로 결과를 hand_landmarks 변수에 저장
+        mp_drawing.draw_landmarks(
+            frame,
+            hand_landmarks,
+            mp_hands.HAND_CONNECTIONS,
+            mp_drawing_styles.get_default_hand_landmarks_style(),
+            mp_drawing_styles.get_default_hand_connections_style(),
+        )
+
+        points = hand_landmarks.landmark  # landmark 좌표 정보들
+
+        fingers = [0, 0, 0, 0, 0]
+
+        if distance(points[4], points[9]) > distance(points[3], points[9]):
+            fingers[0] = 1
+
+        for i in range(1, 5): 
+            if distance(points[4 * (i + 1)], points[0]) > distance(
+                points[4 * (i + 1) - 1], points[0]
+            ):
+                fingers[i] = 1  
+
+        # 주먹 모양 인식시음
+            img = cv2.imread("breaktime.png")
+
+            remain_time = int(total_time - (time.time() - start_time)+11)
+            minutes = remain_time // 60
+            seconds = remain_time % 60
+
+            if minutes > 0:
+                time_display = f"Timer: {minutes} min {seconds} sec"
+            else:
+                time_display = f"Timer: {seconds} sec"
+
+            if remain_time <=0:
+                new_elapsed_time = int(time.time() - start_time-total_time-10)
+                minutes = new_elapsed_time // 60
+                seconds = new_elapsed_time % 60
+                img = cv2.imread("lecture.png")
+                if minutes > 0:
+                    time_display = f"Timer: {minutes} min {seconds} sec"
+                else:
+                    time_display = f"Timer: {seconds} sec"
+                    
+        cv2.putText(
+            frame,
+            time_display,
+            (20, 50),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1,
+            (255, 0, 0),
+            2,
+        )
+    img_resized = resize_to_match(frame, img)
+    combined = cv2.hconcat([frame, img_resized])
+    cv2.imshow("lecture", combined)
+    key = cv2.waitKey(1) & 0xFF
+    if key == ord('q'):
+        break
+cap.release()
+cv2.destroyAllWindows()
+
+#추가로 타이머가 반복되게 하고 싶은데 elpased_time이 타이머가 시작됨과 동시에 계속 증가해서 다른 시간조건들을 맞추기가 힘들어 반복되는 알맞은 조건을 생각해내기 힘듦
+#그냥 이렇게 구현이 되는걸 저희가 만들었습니다. 이런 식으로 발표해도 괜찮을듯
