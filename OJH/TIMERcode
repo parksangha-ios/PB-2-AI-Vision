@@ -23,7 +23,7 @@ def resize_to_match(frame, img):
 
 hands = mp_hands.Hands(max_num_hands=1)
 
-total_time = 10  # 빠른 전환을 보기 위해 쉬는시간 10초로 설정했음
+total_time = 10  # 빠른 전환을 보기 위해 쉬는시간 10초로 설정했음 이후 설정 시간에 맞게 고치기
 timer_running = False
 start_time = None
 
@@ -65,7 +65,7 @@ while cap.isOpened():
         # 주먹 모양 인식시음
             img = cv2.imread("breaktime.png")
 
-            remain_time = int(total_time - (time.time() - start_time)+11)
+            remain_time = int(total_time - (time.time() - start_time)+11) # 초반 쉬는시간 빼기
             minutes = remain_time // 60
             seconds = remain_time % 60
 
@@ -75,7 +75,7 @@ while cap.isOpened():
                 time_display = f"Timer: {seconds} sec"
 
             if remain_time <=0:
-                new_elapsed_time = int(time.time() - start_time-total_time-10)
+                new_elapsed_time = int(time.time() - start_time-total_time-10) #쉬는시간 + 지나간 시간 빼기
                 minutes = new_elapsed_time // 60
                 seconds = new_elapsed_time % 60
                 img = cv2.imread("lecture.png")
