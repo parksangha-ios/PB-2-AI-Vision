@@ -38,6 +38,9 @@ rad = 40
 var_inits = False
 prevx, prevy = 0, 0
 
+ml2 = 600  # 도구의 오른쪽 여백
+max_x2, max_y2 = 800, 50
+
 # 도구별 두께 설정
 thick_pen = 4          # 펜 도구 두께
 thick_highlighter = 20 # 형광펜 두께
@@ -47,6 +50,10 @@ thick_erase = 30       # 지우개 크기
 tools = cv.imread("tools1.jpg")
 tools = tools.astype('uint8')
 tools = cv.resize(tools, (max_x - ml, max_y))  # 슬라이드에 맞게 도구 이미지 크기 조정
+
+color = cv.imread("color.jpg")
+color = color.astype('uint8')
+color = cv.resize(color, (max_x2 - ml2, max_y2))
 
 def index_below_middle(yi_middle, y9, xi, x8, yi, y8):
     """
@@ -76,7 +83,7 @@ def index_horizontal(yi, y9, xi, x8, yi_middle, y8):
     fingers_together = distance < 40  # 붙어있다고 판단하는 거리 (40픽셀)
 
     # 검지와 중지가 손바닥 중심 높이와 가까운지 확인 (수평에 가까움)
-    horizontal_condition = abs(yi - y9) < 40 and abs(y8 - y9) < 40  # 수평 허용 범위 20픽셀
+    horizontal_condition = abs(yi - y9) < 50 and abs(y8 - y9) < 50 
 
     return fingers_together and horizontal_condition
 
@@ -91,6 +98,24 @@ def getTool(x):
         return "shrink"
     else:
         return "erase"
+    
+COLOR_SECTIONS = {
+    "red": (600, 640),
+    "yellow": (640, 680),
+    "green": (680, 720),
+    "blue": (720, 760),
+    "black": (760, 800),
+}   
+
+def getTool2(x):
+    """color 이미지의 포인터 위치에 따라 색상 선택"""
+    for color, (start, end) in COLOR_SECTIONS.items():
+        if start <= x < end:
+            return color
+    return None  # 영역 외부 클릭 시 None
+
+selected_color = (0, 0, 255)  # 초기 색상 (빨간색)
+
 
 def index_raised(yi, y9):
     if (y9 - yi) > 40:
@@ -111,7 +136,6 @@ while True:
     slide_image_copy = slide_image.copy()
     # 포인터 레이어를 흰색 배경으로 초기화
     pointer_layer = np.full_like(slide_image, 255)  # 흰색 배경
-
     if op.multi_hand_landmarks:
         for i in op.multi_hand_landmarks:
             # 웹캠 프레임에 손 랜드마크 그리기
@@ -147,9 +171,23 @@ while True:
             else:
                 time_init = True
                 rad = 40
-
+            #색깔 선택
+            if 600 <= x <= 800 and y <= max_y2:
+                selected_tool = getTool2(x)
+                if selected_tool:
+                    # 색상 매핑: 빨강, 노랑, 초록, 파랑, 검정
+                    color_map = {
+                        "red": (0, 0, 255),
+                        "yellow": (0, 255, 255),
+                        "green": (0, 255, 0),
+                        "blue": (255, 0, 0),
+                        "black": (0, 0, 0),
+                    }
+                    selected_color = color_map[selected_tool]
+                    curr_tool = "color selection"  # 현재 선택한 도구 정보 업데이트
+                cv.circle(pointer_layer, (x, y), 5, (0, 0, 255), -1)  # 빨간색 원
             # 현재 선택된 도구에 따른 포인터 시각화
-            if curr_tool == "laser pointer":
+            if curr_tool == "laser pointer" or curr_tool == "color selection":
                 cv.circle(pointer_layer, (x, y), 5, (0, 0, 255), -1)  # 빨간색 원
             elif curr_tool == "erase":
                 size = thick_erase  # 지우개 크기 사용
@@ -168,7 +206,7 @@ while True:
             if curr_tool == "draw" or curr_tool == "highlighter":
                 if index_raised(yi, y9) or index_below_middle(yi_middle, y9, xi, x8, yi, y8) or index_horizontal(yi, y9, xi, x8, yi_middle, y8):
                     layer = pen_layer if curr_tool == "draw" else highlight_layer
-                    color = (0, 0, 255) if curr_tool == "draw" else (0, 255, 255)
+                    color = selected_color if curr_tool == "draw" else selected_color
                     thickness = thick_pen if curr_tool == "draw" else thick_highlighter
                     if prevx != 0 and prevy != 0:
                         cv.line(layer, (prevx, prevy), (x, y), color, thickness)
@@ -225,6 +263,8 @@ while True:
                     cv.circle(pen_layer, (x, y), thick_erase, (0, 0, 0), -1)
                     cv.circle(highlight_layer, (x, y), thick_erase, (0, 0, 0), -1)
 
+    cv.rectangle(slide_image_copy, (750, 50), (790, 70), selected_color, -1)
+
     # 슬라이드 이미지와 pen_layer, highlight_layer를 결합 (흰색 배경 제외)
     # pen_layer에서 그림이 있는 곳의 마스크 생성
     pen_gray = cv.cvtColor(pen_layer, cv.COLOR_BGR2GRAY)
@@ -259,6 +299,9 @@ while True:
     slide_image_copy[:max_y, ml:max_x] = cv.addWeighted(
         tools, 0.7, slide_image_copy[:max_y, ml:max_x], 0.3, 0
     )
+    slide_image_copy[:max_y2, ml2:max_x2] = cv.addWeighted(
+        color, 0.7, slide_image_copy[:max_y2, ml2:max_x2], 0.3, 0
+    )
 
     cv.putText(
         slide_image_copy,
@@ -292,6 +335,9 @@ while True:
             slide_image = cv.resize(slide_image, (800, 800))
             pen_layer = np.zeros_like(slide_image)
             highlight_layer = np.zeros_like(slide_image)  # 형광펜 레이어 초기화
-
+print("Color image shape:", color.shape)
+print("Overlay area shape:", slide_image_copy[:max_y2, ml2:max_x2].shape)
+print("Color image dtype:", color.dtype)
+print("Overlay area dtype:", slide_image_copy[:max_y2, ml2:max_x2].dtype)
 cap.release()
 cv.destroyAllWindows()
