@@ -123,6 +123,8 @@ def index_raised(yi, y9):
     return False
 
 cap = cv.VideoCapture(0)
+cap.release()  # 현재 카메라 세션 종료
+cap = cv.VideoCapture(0)  # 새롭게 카메라 객체를 생성하여 기본값 복구
 while True:
     ret, frm = cap.read()
     if not ret:
@@ -284,7 +286,7 @@ while True:
     # 형광펜 레이어를 slide_image_copy에 반투명하게 합성
     # 투명도(alpha)를 0.4로 설정하여 형광펜 효과 적용
     alpha = 0.4  # 투명도 조절 (0.0 투명 ~ 1.0 불투명)
-    highlight_color = (0, 255, 255)  # 형광펜 색상 (노란색)
+    highlight_color = selected_color  # 형광펜 색상 (노란색)
     highlight_indices = np.where(mask_highlight == 255)
     for c in range(3):  # B, G, R 채널 각각에 대해
         slide_image_copy[highlight_indices[0], highlight_indices[1], c] = (
@@ -299,9 +301,11 @@ while True:
     slide_image_copy[:max_y, ml:max_x] = cv.addWeighted(
         tools, 0.7, slide_image_copy[:max_y, ml:max_x], 0.3, 0
     )
+
     slide_image_copy[:max_y2, ml2:max_x2] = cv.addWeighted(
         color, 0.7, slide_image_copy[:max_y2, ml2:max_x2], 0.3, 0
     )
+
 
     cv.putText(
         slide_image_copy,
@@ -317,7 +321,6 @@ while True:
     cv.imshow("Lecture", slide_image_copy)
     # 웹캠 피드 표시
     cv.imshow("Webcam", frm)
-
     key = cv.waitKey(1) & 0xFF
     if key == 27:  # ESC 키
         break
@@ -335,9 +338,6 @@ while True:
             slide_image = cv.resize(slide_image, (800, 800))
             pen_layer = np.zeros_like(slide_image)
             highlight_layer = np.zeros_like(slide_image)  # 형광펜 레이어 초기화
-print("Color image shape:", color.shape)
-print("Overlay area shape:", slide_image_copy[:max_y2, ml2:max_x2].shape)
-print("Color image dtype:", color.dtype)
-print("Overlay area dtype:", slide_image_copy[:max_y2, ml2:max_x2].dtype)
+
 cap.release()
 cv.destroyAllWindows()
