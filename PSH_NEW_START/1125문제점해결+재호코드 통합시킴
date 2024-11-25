@@ -50,10 +50,9 @@ thick_erase = 30       # 지우개 크기
 selection_done = False
 selected_area_pen = None        # pen_layer에서 선택된 영역
 selected_area_highlight = None  # highlight_layer에서 선택된 영역
-selected_mask_pen = None
-selected_mask_highlight = None
 x_offset = 0
 y_offset = 0
+x_start = y_start = x_end = y_end = 0  # 선택 영역의 시작과 끝 좌표를 전역 변수로 선언
 selection_cooldown = 0  # 선택 쿨다운 초기화
 
 # 도구 이미지 로드
@@ -288,10 +287,8 @@ while True:
                                 y_start, y_end = min(y1, y), max(y1, y)
                                 # pen_layer에서 선택된 영역 추출
                                 selected_area_pen = pen_layer[y_start:y_end, x_start:x_end].copy()
-                                selected_mask_pen = selected_area_pen[:, :, 3]
                                 # highlight_layer에서 선택된 영역 추출
                                 selected_area_highlight = highlight_layer[y_start:y_end, x_start:x_end].copy()
-                                selected_mask_highlight = selected_area_highlight[:, :, 3]
                                 x_offset = x_start
                                 y_offset = y_start
                                 selection_done = True
@@ -308,71 +305,75 @@ while True:
                     # 이동 모드
                     if middle_folded_status:
                         # 중지를 접은 상태로 이동
-                        x_offset = x - (x_end - x_start) // 2
-                        y_offset = y - (y_end - y_start) // 2
+                        # 선택 영역의 크기를 계산
+                        w = selected_area_pen.shape[1] if selected_area_pen is not None else selected_area_highlight.shape[1]
+                        h = selected_area_pen.shape[0] if selected_area_pen is not None else selected_area_highlight.shape[0]
+
+                        x_offset = x - w // 2
+                        y_offset = y - h // 2
                     elif fingers_up_status:
                         # 위치 확정
-                        if (selected_area_pen is not None and selected_mask_pen is not None) or \
-                           (selected_area_highlight is not None and selected_mask_highlight is not None):
-                            # pen_layer에 합성
-                            if selected_area_pen is not None and selected_mask_pen is not None:
-                                h_pen, w_pen = selected_area_pen.shape[:2]
-                                x_end_pen = x_offset + w_pen
-                                y_end_pen = y_offset + h_pen
+                        # pen_layer에 합성
+                        if selected_area_pen is not None:
+                            h_pen, w_pen = selected_area_pen.shape[:2]
+                            x1_dst_pen = max(0, x_offset)
+                            y1_dst_pen = max(0, y_offset)
+                            x2_dst_pen = min(800, x_offset + w_pen)
+                            y2_dst_pen = min(800, y_offset + h_pen)
 
-                                # 경계 체크
-                                x1_dst_pen = max(0, x_offset)
-                                y1_dst_pen = max(0, y_offset)
-                                x2_dst_pen = min(800, x_end_pen)
-                                y2_dst_pen = min(800, y_end_pen)
+                            x1_src_pen = x1_dst_pen - x_offset
+                            y1_src_pen = y1_dst_pen - y_offset
+                            x2_src_pen = x1_src_pen + (x2_dst_pen - x1_dst_pen)
+                            y2_src_pen = y1_src_pen + (y2_dst_pen - y1_dst_pen)
 
-                                x1_src_pen = max(0, -x_offset)
-                                y1_src_pen = max(0, -y_offset)
-                                x2_src_pen = x1_src_pen + (x2_dst_pen - x1_dst_pen)
-                                y2_src_pen = y1_src_pen + (y2_dst_pen - y1_dst_pen)
+                            # 이동된 선택 영역 추출
+                            selected_area_moved_pen = selected_area_pen[y1_src_pen:y2_src_pen, x1_src_pen:x2_src_pen]
 
-                                selected_area_moved_pen = np.zeros_like(pen_layer)
-                                selected_area_moved_pen[y1_dst_pen:y2_dst_pen, x1_dst_pen:x2_dst_pen] = selected_area_pen[y1_src_pen:y2_src_pen, x1_src_pen:x2_src_pen]
+                            # 채널 분리
+                            b_pen, g_pen, r_pen, a_pen = cv.split(selected_area_moved_pen)
+                            overlay_color_pen = cv.merge((b_pen, g_pen, r_pen))
+                            mask_pen = a_pen
 
-                                b_pen, g_pen, r_pen, a_pen = cv.split(selected_area_moved_pen)
-                                overlay_color_pen = cv.merge((b_pen, g_pen, r_pen))
-                                mask_moved_pen = a_pen
-                                cv.copyTo(overlay_color_pen, mask=mask_moved_pen, dst=pen_layer)
+                            # ROI 정의
+                            roi_pen = pen_layer[y1_dst_pen:y2_dst_pen, x1_dst_pen:x2_dst_pen]
 
-                            # highlight_layer에 합성
-                            if selected_area_highlight is not None and selected_mask_highlight is not None:
-                                h_highlight, w_highlight = selected_area_highlight.shape[:2]
-                                x_end_highlight = x_offset + w_highlight
-                                y_end_highlight = y_offset + h_highlight
+                            # 알파 채널을 마스크로 사용하여 합성
+                            cv.copyTo(selected_area_moved_pen, mask_pen, roi_pen)
 
-                                # 경계 체크 (pen_layer와 동일)
-                                x1_dst_highlight = max(0, x_offset)
-                                y1_dst_highlight = max(0, y_offset)
-                                x2_dst_highlight = min(800, x_end_highlight)
-                                y2_dst_highlight = min(800, y_end_highlight)
+                        # highlight_layer에 합성
+                        if selected_area_highlight is not None:
+                            h_highlight, w_highlight = selected_area_highlight.shape[:2]
+                            x1_dst_highlight = max(0, x_offset)
+                            y1_dst_highlight = max(0, y_offset)
+                            x2_dst_highlight = min(800, x_offset + w_highlight)
+                            y2_dst_highlight = min(800, y_offset + h_highlight)
 
-                                x1_src_highlight = max(0, -x_offset)
-                                y1_src_highlight = max(0, -y_offset)
-                                x2_src_highlight = x1_src_highlight + (x2_dst_highlight - x1_dst_highlight)
-                                y2_src_highlight = y1_src_highlight + (y2_dst_highlight - y1_dst_highlight)
+                            x1_src_highlight = x1_dst_highlight - x_offset
+                            y1_src_highlight = y1_dst_highlight - y_offset
+                            x2_src_highlight = x1_src_highlight + (x2_dst_highlight - x1_dst_highlight)
+                            y2_src_highlight = y1_src_highlight + (y2_dst_highlight - y1_dst_highlight)
 
-                                selected_area_moved_highlight = np.zeros_like(highlight_layer)
-                                selected_area_moved_highlight[y1_dst_highlight:y2_dst_highlight, x1_dst_highlight:x2_dst_highlight] = selected_area_highlight[y1_src_highlight:y2_src_highlight, x1_src_highlight:x2_src_highlight]
+                            # 이동된 선택 영역 추출
+                            selected_area_moved_highlight = selected_area_highlight[y1_src_highlight:y2_src_highlight, x1_src_highlight:x2_src_highlight]
 
-                                b_highlight, g_highlight, r_highlight, a_highlight = cv.split(selected_area_moved_highlight)
-                                overlay_color_highlight = cv.merge((b_highlight, g_highlight, r_highlight))
-                                mask_moved_highlight = a_highlight
-                                cv.copyTo(overlay_color_highlight, mask=mask_moved_highlight, dst=highlight_layer)
+                            # 채널 분리
+                            b_highlight, g_highlight, r_highlight, a_highlight = cv.split(selected_area_moved_highlight)
+                            overlay_color_highlight = cv.merge((b_highlight, g_highlight, r_highlight))
+                            mask_highlight = a_highlight
 
-                            # 초기화
-                            selected_area_pen = None
-                            selected_mask_pen = None
-                            selected_area_highlight = None
-                            selected_mask_highlight = None
-                            selection_done = False
-                            var_inits = False
-                            selection_cooldown = time.time() + 0.5
-                            print("Position confirmed.")
+                            # ROI 정의
+                            roi_highlight = highlight_layer[y1_dst_highlight:y2_dst_highlight, x1_dst_highlight:x2_dst_highlight]
+
+                            # 알파 채널을 마스크로 사용하여 합성
+                            cv.copyTo(selected_area_moved_highlight, mask_highlight, roi_highlight)
+
+                        # 초기화
+                        selected_area_pen = None
+                        selected_area_highlight = None
+                        selection_done = False
+                        var_inits = False
+                        selection_cooldown = time.time() + 0.5
+                        print("Position confirmed.")
                     else:
                         pass
 
@@ -386,62 +387,69 @@ while True:
             # pen_layer의 선택 영역 이동 및 합성
             if selected_area_pen is not None:
                 h_pen, w_pen = selected_area_pen.shape[:2]
-                x_end_pen = x_offset + w_pen
-                y_end_pen = y_offset + h_pen
-
-                # 경계 체크
                 x1_dst_pen = max(0, x_offset)
                 y1_dst_pen = max(0, y_offset)
-                x2_dst_pen = min(800, x_end_pen)
-                y2_dst_pen = min(800, y_end_pen)
+                x2_dst_pen = min(800, x_offset + w_pen)
+                y2_dst_pen = min(800, y_offset + h_pen)
 
-                x1_src_pen = max(0, -x_offset)
-                y1_src_pen = max(0, -y_offset)
+                x1_src_pen = x1_dst_pen - x_offset
+                y1_src_pen = y1_dst_pen - y_offset
                 x2_src_pen = x1_src_pen + (x2_dst_pen - x1_dst_pen)
                 y2_src_pen = y1_src_pen + (y2_dst_pen - y1_dst_pen)
 
-                selected_area_moved_pen = np.zeros_like(pen_layer)
-                selected_area_moved_pen[y1_dst_pen:y2_dst_pen, x1_dst_pen:x2_dst_pen] = selected_area_pen[y1_src_pen:y2_src_pen, x1_src_pen:x2_src_pen]
+                # 이동된 선택 영역 추출
+                selected_area_moved_pen = selected_area_pen[y1_src_pen:y2_src_pen, x1_src_pen:x2_src_pen]
 
-                # 이동 중인 선택 영역을 slide_image_copy에 합성
+                # 채널 분리
                 b_pen, g_pen, r_pen, a_pen = cv.split(selected_area_moved_pen)
                 overlay_color_pen = cv.merge((b_pen, g_pen, r_pen))
-                mask_moved_pen = a_pen
-                cv.copyTo(overlay_color_pen, mask=mask_moved_pen, dst=slide_image_copy)
+                mask_pen = a_pen
+
+                # ROI 정의
+                roi_pen = slide_image_copy[y1_dst_pen:y2_dst_pen, x1_dst_pen:x2_dst_pen]
+
+                # 알파 채널을 마스크로 사용하여 합성
+                cv.copyTo(overlay_color_pen, mask_pen, roi_pen)
 
             # highlight_layer의 선택 영역 이동 및 합성
             if selected_area_highlight is not None:
                 h_highlight, w_highlight = selected_area_highlight.shape[:2]
-                x_end_highlight = x_offset + w_highlight
-                y_end_highlight = y_offset + h_highlight
-
-                # 경계 체크
                 x1_dst_highlight = max(0, x_offset)
                 y1_dst_highlight = max(0, y_offset)
-                x2_dst_highlight = min(800, x_end_highlight)
-                y2_dst_highlight = min(800, y_end_highlight)
+                x2_dst_highlight = min(800, x_offset + w_highlight)
+                y2_dst_highlight = min(800, y_offset + h_highlight)
 
-                x1_src_highlight = max(0, -x_offset)
-                y1_src_highlight = max(0, -y_offset)
+                x1_src_highlight = x1_dst_highlight - x_offset
+                y1_src_highlight = y1_dst_highlight - y_offset
                 x2_src_highlight = x1_src_highlight + (x2_dst_highlight - x1_dst_highlight)
                 y2_src_highlight = y1_src_highlight + (y2_dst_highlight - y1_dst_highlight)
 
-                selected_area_moved_highlight = np.zeros_like(highlight_layer)
-                selected_area_moved_highlight[y1_dst_highlight:y2_dst_highlight, x1_dst_highlight:x2_dst_highlight] = selected_area_highlight[y1_src_highlight:y2_src_highlight, x1_src_highlight:x2_src_highlight]
+                # 이동된 선택 영역 추출
+                selected_area_moved_highlight = selected_area_highlight[y1_src_highlight:y2_src_highlight, x1_src_highlight:x2_src_highlight]
 
-                # 이동 중인 선택 영역을 slide_image_copy에 합성
+                # 채널 분리
                 b_highlight, g_highlight, r_highlight, a_highlight = cv.split(selected_area_moved_highlight)
                 overlay_color_highlight = cv.merge((b_highlight, g_highlight, r_highlight))
-                mask_moved_highlight = a_highlight
-                cv.copyTo(overlay_color_highlight, mask=mask_moved_highlight, dst=slide_image_copy)
+                mask_highlight = a_highlight
+
+                # ROI 정의
+                roi_highlight = slide_image_copy[y1_dst_highlight:y2_dst_highlight, x1_dst_highlight:x2_dst_highlight]
+
+                # 알파 채널을 마스크로 사용하여 합성
+                cv.copyTo(overlay_color_highlight, mask_highlight, roi_highlight)
 
             # 선택 영역 주위에 점선 사각형 그리기
             thickness = 2
             line_type = cv.LINE_AA
             color = (0, 255, 0)
             dash_length = 10
-            x_min, x_max = x_offset, x_offset + max(w_pen if selected_area_pen is not None else 0, w_highlight if selected_area_highlight is not None else 0)
-            y_min, y_max = y_offset, y_offset + max(h_pen if selected_area_pen is not None else 0, h_highlight if selected_area_highlight is not None else 0)
+
+            w = selected_area_pen.shape[1] if selected_area_pen is not None else selected_area_highlight.shape[1]
+            h = selected_area_pen.shape[0] if selected_area_pen is not None else selected_area_highlight.shape[0]
+
+            x_min, x_max = x_offset, x_offset + w
+            y_min, y_max = y_offset, y_offset + h
+
             for i in range(x_min, x_max, dash_length * 2):
                 cv.line(slide_image_copy, (i, y_min), (i + dash_length, y_min), color, thickness, line_type)
                 cv.line(slide_image_copy, (i, y_max), (i + dash_length, y_max), color, thickness, line_type)
@@ -455,7 +463,7 @@ while True:
     b, g, r, a = cv.split(pen_layer)
     overlay_color = cv.merge((b, g, r))
     mask_pen = a
-    cv.copyTo(overlay_color, mask=mask_pen, dst=slide_image_copy)
+    cv.copyTo(overlay_color, mask_pen, slide_image_copy)
 
     # highlight_layer를 slide_image_copy에 블렌딩
     alpha_value = 0.4  # 투명도 설정
@@ -480,7 +488,7 @@ while True:
     # 포인터 레이어 합성
     pointer_gray = cv.cvtColor(pointer_layer, cv.COLOR_BGR2GRAY)
     _, mask_pointer = cv.threshold(pointer_gray, 254, 255, cv.THRESH_BINARY_INV)
-    cv.copyTo(pointer_layer, mask=mask_pointer, dst=slide_image_copy)
+    cv.copyTo(pointer_layer, mask_pointer, slide_image_copy)
 
     # 슬라이드 이미지에 도구 오버레이
     slide_image_copy[:max_y, ml:max_x] = cv.addWeighted(
