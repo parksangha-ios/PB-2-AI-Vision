@@ -108,16 +108,6 @@ while True:
             else:
                 eye_closed_time = None  # 눈을 뜨면 초기화
 
-            drawing_spec = mp_drawing.DrawingSpec(color=(255, 255, 255), thickness=1, circle_radius=0.1)
-            # 얼굴 랜드마크 그리기
-            mp_drawing.draw_landmarks(
-                image=frame,
-                landmark_list=landmarks,
-                connections=mp_mesh.FACEMESH_TESSELATION,
-                landmark_drawing_spec=None,  # 점을 그리지 않음
-                connection_drawing_spec=drawing_spec  # 연결선 스타일만 적용
-            )
-    
     # 모자이크 적용
     if is_mosaic_active:
         frame = apply_mosaic(frame, landmarks)
