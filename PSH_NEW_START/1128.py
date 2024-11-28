@@ -136,24 +136,15 @@ def middle_finger_folded(hand):
 
 # 주먹 동작 인식 함수 추가
 def is_fist(hand):
-    fingers = [0, 0, 0, 0, 0]
-    points = hand.landmark
-
-    # 엄지손가락
-    if points[4].x < points[3].x:
-        fingers[0] = 1  # 오른손 기준
-    else:
-        fingers[0] = 0
-
-    # 나머지 손가락
-    tips = [8, 12, 16, 20]
-    for i, tip in enumerate(tips):
-        if points[tip].y < points[tip - 2].y:
-            fingers[i+1] = 1
-        else:
-            fingers[i+1] = 0
-
-    if sum(fingers) == 0:
+    fingers_folded = 0
+    # 검지, 중지, 약지, 새끼손가락
+    for id in [8, 12, 16, 20]:
+        if hand.landmark[id].y > hand.landmark[id - 2].y:
+            fingers_folded += 1
+    # 엄지손가락은 옆으로 접혀 있는지 확인
+    if abs(hand.landmark[4].x - hand.landmark[3].x) < 0.02:
+        fingers_folded += 1
+    if fingers_folded >= 4:
         return True
     else:
         return False
@@ -166,7 +157,9 @@ cap = cv.VideoCapture(0)
 mode = 'lecture'  # 현재 모드: 'lecture' 또는 'break'
 timer_running = False
 start_time = None
-total_time = 10  # 타이머 시간 (초)
+lecture_duration = 10  # 강의 모드에서의 타이머 시간 (초)
+break_duration = 10     # 쉬는 시간 모드 시간 (초)
+display_time = lecture_duration  # display_time 초기화
 
 while True:
     ret, frm = cap.read()
@@ -188,62 +181,53 @@ while True:
     slide_image_copy = slide_image_current.copy()
     pointer_layer = np.full_like(slide_image_current, 255)
 
+    # 타이머 실행 및 모드 전환
+    if mode == 'lecture':
+        if timer_running:
+            elapsed_time = time.time() - start_time
+            display_time = int(lecture_duration - elapsed_time)
+            if elapsed_time >= lecture_duration:
+                mode = 'break'
+                timer_running = True
+                start_time = time.time()
+                print("Lecture time over. Switching to break mode.")
+        else:
+            display_time = lecture_duration  # 타이머가 시작되지 않았을 때는 전체 시간을 표시
+    elif mode == 'break':
+        elapsed_time = time.time() - start_time
+        display_time = int(break_duration - elapsed_time)
+        if elapsed_time >= break_duration:
+            mode = 'lecture'
+            timer_running = False
+            start_time = None
+            display_time = lecture_duration
+            print("Break time over. Back to lecture mode.")
+
+    # 타이머가 음수가 되지 않도록 보정
+    display_time = max(display_time, 0)
+
+    # 손 동작 인식 및 도구 기능 구현
     if op.multi_hand_landmarks:
         for hand in op.multi_hand_landmarks:
             mp_drawing.draw_landmarks(frm, hand, mp_hands.HAND_CONNECTIONS)
-
             x, y = int(hand.landmark[8].x * 800), int(hand.landmark[8].y * 800)
-
             xi, yi = int(hand.landmark[12].x * 800), int(hand.landmark[12].y * 800)
             y9 = int(hand.landmark[9].y * 800)
             yi_middle = yi
             y8 = y
             x8 = x
 
-            # 손가락 상태 확인
             fingers_up_status = fingers_up(hand)
             middle_folded_status = middle_finger_folded(hand)
             fist_status = is_fist(hand)
 
-            # 주먹 동작 인식
-            if fist_status:
-                if not timer_running:
+            if mode == 'lecture':
+                # 주먹 동작 인식하여 타이머 시작
+                if fist_status and not timer_running:
                     start_time = time.time()
                     timer_running = True
-            else:
-                # 손이 인식되었지만 주먹이 아님
-                pass
+                    print("Lecture timer started.")
 
-            # 타이머 실행
-            if timer_running:
-                elapsed_time = time.time() - start_time
-                if mode == 'lecture':
-                    # 강의 모드에서 타이머는 0부터 10초까지 증가
-                    display_time = int(elapsed_time)
-                    if elapsed_time >= total_time:
-                        mode = 'break'
-                        start_time = time.time()  # 타이머 재설정
-                        timer_running = False  # 타이머 종료
-                elif mode == 'break':
-                    # 쉬는 시간 모드에서 타이머는 10부터 0까지 감소
-                    display_time = int(total_time - elapsed_time)
-                    if display_time <= 0:
-                        mode = 'lecture'
-                        timer_running = False  # 타이머 종료
-
-                # 남은 시간을 프레임에 표시
-                cv.putText(
-                    frm,
-                    f"Timer: {display_time} sec",
-                    (20, 50),
-                    cv.FONT_HERSHEY_SIMPLEX,
-                    1,
-                    (255, 0, 0),
-                    2,
-                )
-
-            # 현재 모드가 'lecture'일 때만 도구 기능 동작
-            if mode == 'lecture':
                 # 도구 선택 영역
                 if x < max_x and y < max_y and x > ml:
                     if time_init:
@@ -462,80 +446,80 @@ while True:
                         cv.circle(pen_layer, (x, y), thick_erase, (0, 0, 0, 0), -1)
                         cv.circle(highlight_layer, (x, y), thick_erase, (0, 0, 0, 0), -1)
 
-            # 선택된 영역 이동 및 합성
-            if selection_done and curr_tool == "select_move":
-                # pen_layer의 선택 영역 이동 및 합성
-                if selected_area_pen is not None:
-                    h_pen, w_pen = selected_area_pen.shape[:2]
-                    x1_dst_pen = max(0, x_offset)
-                    y1_dst_pen = max(0, y_offset)
-                    x2_dst_pen = min(800, x_offset + w_pen)
-                    y2_dst_pen = min(800, y_offset + h_pen)
+    # 선택된 영역 이동 및 합성
+    if selection_done and curr_tool == "select_move":
+        # pen_layer의 선택 영역 이동 및 합성
+        if selected_area_pen is not None:
+            h_pen, w_pen = selected_area_pen.shape[:2]
+            x1_dst_pen = max(0, x_offset)
+            y1_dst_pen = max(0, y_offset)
+            x2_dst_pen = min(800, x_offset + w_pen)
+            y2_dst_pen = min(800, y_offset + h_pen)
 
-                    x1_src_pen = x1_dst_pen - x_offset
-                    y1_src_pen = y1_dst_pen - y_offset
-                    x2_src_pen = x1_src_pen + (x2_dst_pen - x1_dst_pen)
-                    y2_src_pen = y1_src_pen + (y2_dst_pen - y1_dst_pen)
+            x1_src_pen = x1_dst_pen - x_offset
+            y1_src_pen = y1_dst_pen - y_offset
+            x2_src_pen = x1_src_pen + (x2_dst_pen - x1_dst_pen)
+            y2_src_pen = y1_src_pen + (y2_dst_pen - y1_dst_pen)
 
-                    # 이동된 선택 영역 추출
-                    selected_area_moved_pen = selected_area_pen[y1_src_pen:y2_src_pen, x1_src_pen:x2_src_pen]
+            # 이동된 선택 영역 추출
+            selected_area_moved_pen = selected_area_pen[y1_src_pen:y2_src_pen, x1_src_pen:x2_src_pen]
 
-                    # 채널 분리
-                    b_pen, g_pen, r_pen, a_pen = cv.split(selected_area_moved_pen)
-                    overlay_color_pen = cv.merge((b_pen, g_pen, r_pen))
-                    mask_pen = a_pen
+            # 채널 분리
+            b_pen, g_pen, r_pen, a_pen = cv.split(selected_area_moved_pen)
+            overlay_color_pen = cv.merge((b_pen, g_pen, r_pen))
+            mask_pen = a_pen
 
-                    # ROI 정의
-                    roi_pen = slide_image_copy[y1_dst_pen:y2_dst_pen, x1_dst_pen:x2_dst_pen]
+            # ROI 정의
+            roi_pen = slide_image_copy[y1_dst_pen:y2_dst_pen, x1_dst_pen:x2_dst_pen]
 
-                    # 알파 채널을 마스크로 사용하여 합성
-                    cv.copyTo(overlay_color_pen, mask_pen, roi_pen)
+            # 알파 채널을 마스크로 사용하여 합성
+            cv.copyTo(overlay_color_pen, mask_pen, roi_pen)
 
-                # highlight_layer의 선택 영역 이동 및 합성
-                if selected_area_highlight is not None:
-                    h_highlight, w_highlight = selected_area_highlight.shape[:2]
-                    x1_dst_highlight = max(0, x_offset)
-                    y1_dst_highlight = max(0, y_offset)
-                    x2_dst_highlight = min(800, x_offset + w_highlight)
-                    y2_dst_highlight = min(800, y_offset + h_highlight)
+        # highlight_layer의 선택 영역 이동 및 합성
+        if selected_area_highlight is not None:
+            h_highlight, w_highlight = selected_area_highlight.shape[:2]
+            x1_dst_highlight = max(0, x_offset)
+            y1_dst_highlight = max(0, y_offset)
+            x2_dst_highlight = min(800, x_offset + w_highlight)
+            y2_dst_highlight = min(800, y_offset + h_highlight)
 
-                    x1_src_highlight = x1_dst_highlight - x_offset
-                    y1_src_highlight = y1_dst_highlight - y_offset
-                    x2_src_highlight = x1_src_highlight + (x2_dst_highlight - x1_dst_highlight)
-                    y2_src_highlight = y1_src_highlight + (y2_dst_highlight - y1_dst_highlight)
+            x1_src_highlight = x1_dst_highlight - x_offset
+            y1_src_highlight = y1_dst_highlight - y_offset
+            x2_src_highlight = x1_src_highlight + (x2_dst_highlight - x1_dst_highlight)
+            y2_src_highlight = y1_src_highlight + (y2_dst_highlight - y1_dst_highlight)
 
-                    # 이동된 선택 영역 추출
-                    selected_area_moved_highlight = selected_area_highlight[y1_src_highlight:y2_src_highlight, x1_src_highlight:x2_src_highlight]
+            # 이동된 선택 영역 추출
+            selected_area_moved_highlight = selected_area_highlight[y1_src_highlight:y2_src_highlight, x1_src_highlight:x2_src_highlight]
 
-                    # 채널 분리
-                    b_highlight, g_highlight, r_highlight, a_highlight = cv.split(selected_area_moved_highlight)
-                    overlay_color_highlight = cv.merge((b_highlight, g_highlight, r_highlight))
-                    mask_highlight = a_highlight
+            # 채널 분리
+            b_highlight, g_highlight, r_highlight, a_highlight = cv.split(selected_area_moved_highlight)
+            overlay_color_highlight = cv.merge((b_highlight, g_highlight, r_highlight))
+            mask_highlight = a_highlight
 
-                    # ROI 정의
-                    roi_highlight = slide_image_copy[y1_dst_highlight:y2_dst_highlight, x1_dst_highlight:x2_dst_highlight]
+            # ROI 정의
+            roi_highlight = slide_image_copy[y1_dst_highlight:y2_dst_highlight, x1_dst_highlight:x2_dst_highlight]
 
-                    # 알파 채널을 마스크로 사용하여 합성
-                    cv.copyTo(overlay_color_highlight, mask_highlight, roi_highlight)
+            # 알파 채널을 마스크로 사용하여 합성
+            cv.copyTo(overlay_color_highlight, mask_highlight, roi_highlight)
 
-                # 선택 영역 주위에 점선 사각형 그리기
-                thickness = 2
-                line_type = cv.LINE_AA
-                color = (0, 255, 0)
-                dash_length = 10
+        # 선택 영역 주위에 점선 사각형 그리기
+        thickness = 2
+        line_type = cv.LINE_AA
+        color = (0, 255, 0)
+        dash_length = 10
 
-                w = selected_area_pen.shape[1] if selected_area_pen is not None else selected_area_highlight.shape[1]
-                h = selected_area_pen.shape[0] if selected_area_pen is not None else selected_area_highlight.shape[0]
+        w = selected_area_pen.shape[1] if selected_area_pen is not None else selected_area_highlight.shape[1]
+        h = selected_area_pen.shape[0] if selected_area_pen is not None else selected_area_highlight.shape[0]
 
-                x_min, x_max = x_offset, x_offset + w
-                y_min, y_max = y_offset, y_offset + h
+        x_min, x_max = x_offset, x_offset + w
+        y_min, y_max = y_offset, y_offset + h
 
-                for i in range(x_min, x_max, dash_length * 2):
-                    cv.line(slide_image_copy, (i, y_min), (i + dash_length, y_min), color, thickness, line_type)
-                    cv.line(slide_image_copy, (i, y_max), (i + dash_length, y_max), color, thickness, line_type)
-                for i in range(y_min, y_max, dash_length * 2):
-                    cv.line(slide_image_copy, (x_min, i), (x_min, i + dash_length), color, thickness, line_type)
-                    cv.line(slide_image_copy, (x_max, i), (x_max, i + dash_length), color, thickness, line_type)
+        for i in range(x_min, x_max, dash_length * 2):
+            cv.line(slide_image_copy, (i, y_min), (i + dash_length, y_min), color, thickness, line_type)
+            cv.line(slide_image_copy, (i, y_max), (i + dash_length, y_max), color, thickness, line_type)
+        for i in range(y_min, y_max, dash_length * 2):
+            cv.line(slide_image_copy, (x_min, i), (x_min, i + dash_length), color, thickness, line_type)
+            cv.line(slide_image_copy, (x_max, i), (x_max, i + dash_length), color, thickness, line_type)
 
     cv.rectangle(slide_image_copy, (750, 50), (790, 70), selected_color, -1)
 
@@ -586,6 +570,26 @@ while True:
             2,
         )
 
+    # 타이머와 모드 정보를 웹캠 이미지에 표시
+    cv.putText(
+        frm,
+        f"Mode: {mode.capitalize()}",
+        (20, 50),
+        cv.FONT_HERSHEY_SIMPLEX,
+        1,
+        (0, 255, 0) if mode == 'lecture' else (0, 0, 255),
+        2,
+    )
+    cv.putText(
+        frm,
+        f"Timer: {display_time} sec",
+        (20, 100),
+        cv.FONT_HERSHEY_SIMPLEX,
+        1,
+        (255, 0, 0),
+        2,
+    )
+
     # 강의 슬라이드와 주석을 표시
     cv.imshow("Lecture", slide_image_copy)
     # 웹캠 피드 표시
@@ -598,15 +602,13 @@ while True:
             current_slide += 1
             slide_image = cv.imread(img_files[current_slide])
             slide_image = cv.resize(slide_image, (800, 800))
-            pen_layer = np.zeros((800, 800, 4), dtype=np.uint8)  # 알파 채널 포함
-            highlight_layer = np.zeros((800, 800, 4), dtype=np.uint8)  # 알파 채널 포함
+            # pen_layer와 highlight_layer를 초기화하지 않습니다.
     elif key == ord('d'):  # 이전 슬라이드
         if current_slide > 0:
             current_slide -= 1
             slide_image = cv.imread(img_files[current_slide])
             slide_image = cv.resize(slide_image, (800, 800))
-            pen_layer = np.zeros((800, 800, 4), dtype=np.uint8)  # 알파 채널 포함
-            highlight_layer = np.zeros((800, 800, 4), dtype=np.uint8)  # 알파 채널 포함
+            # pen_layer와 highlight_layer를 초기화하지 않습니다.
 
 cap.release()
 cv.destroyAllWindows()
