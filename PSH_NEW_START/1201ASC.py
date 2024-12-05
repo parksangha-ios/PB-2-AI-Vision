@@ -7,6 +7,8 @@ import time
 # Mediapipe 손 인식 초기화
 mp_hands = mp.solutions.hands
 
+mp_drawing = mp.solutions.drawing_utils
+
 # 손 랜드마크 설정 (신뢰도 향상)
 hand_landmark = mp_hands.Hands(
     min_detection_confidence=0.8,  # 손 인식 최소 신뢰도 증가
@@ -72,7 +74,7 @@ def get_tool(x):
     if x < 50 + tool_margin_left:
         return "highlighter"
     elif x < 100 + tool_margin_left:
-        return "enlarge"
+        return "crop"
     elif x < 150 + tool_margin_left:
         return "draw"
     elif x < 200 + tool_margin_left:
@@ -86,7 +88,87 @@ def get_color(x):
             return color
     return None
 
-cropped_images = []
+# 전역 변수 추가/수정
+summary_images = []  # summary_images를 summary_images로 변경
+last_pinch_time = None
+pinch_count = 0
+selected_summary_index = -1  # summary 이미지 선택을 위한 인덱스
+
+def check_summary_area(x, y):
+    """summary 영역의 어떤 이미지 위에 있는지 확인"""
+    if y < 600 or y > 800:  # summary 영역의 y좌표 범위
+        return -1
+    
+    section_width = 800 // 4
+    index = x // section_width
+    return index if index < len(summary_images) else -1
+
+def process_crop_tool(hand, x, y):
+    global summary_images, last_pinch_time, pinch_count, selected_summary_index
+    global current_cropped_image, var_inits, previous_x, previous_y
+    global xii, yii, rotation_angle
+    
+    if not var_inits:
+        xii, yii = x, y
+        var_inits = True
+        previous_x = x
+        previous_y = y
+    
+    current_time = time.time()
+    pinch_detected = check_pinch_gesture(hand)
+    thumb_direction = detect_thumb_direction(hand, 4, 2)
+    
+    # summary 영역에서의 인덱스 확인
+    if y > 600:
+        selected_summary_index = check_summary_area(x, y)
+    else:
+        selected_summary_index = -1
+
+    if current_cropped_image is not None:
+        if thumb_direction != "neutral":
+            # 회전 처리
+            angle = 90 if thumb_direction == "right" else -90
+            matrix = cv.getRotationMatrix2D(
+                (current_cropped_image.shape[1]/2, current_cropped_image.shape[0]/2),
+                angle, 1.0
+            )
+            rotated = cv.warpAffine(
+                current_cropped_image, matrix,
+                (current_cropped_image.shape[1], current_cropped_image.shape[0])
+            )
+            current_cropped_image = rotated.copy()
+            
+    if pinch_detected:
+        if not last_pinch_time or (current_time - last_pinch_time) > 0.3:
+            pinch_count += 1
+            last_pinch_time = current_time
+            
+            if pinch_count == 2:
+                if selected_summary_index != -1:
+                    if y > previous_y + 50:
+                        summary_images.pop(selected_summary_index)
+                    elif x > previous_x + 50 and selected_summary_index < 3:
+                        if selected_summary_index < len(summary_images) - 1:
+                            summary_images[selected_summary_index], summary_images[selected_summary_index + 1] = \
+                            summary_images[selected_summary_index + 1], summary_images[selected_summary_index]
+                    elif x < previous_x - 50 and selected_summary_index > 0:
+                        summary_images[selected_summary_index], summary_images[selected_summary_index - 1] = \
+                        summary_images[selected_summary_index - 1], summary_images[selected_summary_index]
+                else:
+                    if len(summary_images) >= 4:
+                        warning_img = np.zeros((200, 400, 3), dtype=np.uint8)
+                        cv.putText(warning_img, "최대 4개까지 핵심노트에", (50, 80), cv.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                        cv.putText(warning_img, "저장할 수 있습니다.", (50, 120), cv.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                        cv.imshow("Warning", warning_img)
+                    else:
+                        summary_images.append(current_cropped_image.copy())
+                
+                pinch_count = 0
+            previous_x = x
+            previous_y = y
+
+
+current_cropped_image = None  # 현재 선택된 크롭 이미지
 
 selected_color = (0, 0, 255)  # 초기 색상 (빨간색)
 selected_tool = None  # 선택된 도구 초기화
@@ -151,6 +233,24 @@ def recognize_gesture(fingers_status):
     elif fingers_status == [1, 1, 0, 0, 0]:
         return 'standby'
 
+
+def rotate_image(image, direction):
+    """이미지 회전 함수"""
+    h, w = image.shape[:2]
+    center = (w/2, h/2)
+    angle = 90 if direction == "right" else -90
+    matrix = cv.getRotationMatrix2D(center, -angle, 1.0)
+    return cv.warpAffine(image, matrix, (w, h))
+
+def check_pinch_gesture(hand):
+    """엄지와 검지의 핀치 제스처 확인"""
+    thumb_tip = hand.landmark[4]
+    index_tip = hand.landmark[8]
+    
+    distance = ((thumb_tip.x - index_tip.x)**2 + (thumb_tip.y - index_tip.y)**2)**0.5
+    return distance < 0.05  # 임계값 조정 가능
+
+
 # =========================================================
 
 
@@ -175,7 +275,17 @@ def process_frame(frame):
     global x1, y1, xii, yii  # x1, y1, xii, yii를 전역 변수로 선언
     global slide_image_copy  # slide_image_copy를 전역 변수로 선언
     global show_summary, last_gesture_time
+    global last_thumb_direction, rotation_start_time, is_rotating
+    global pinch_count, last_pinch_time
 
+    pinch_count = 0
+    last_pinch_time = None
+    # key_notes = []  # 핵심노트 저장 리스트
+    rotation_start_time = 0
+    is_rotating = False
+    last_thumb_direction = "neutral"
+    
+    current_time = time.time()
     rgb = cv.cvtColor(frame, cv.COLOR_BGR2RGB)
     op = hand_landmark.process(rgb)
 
@@ -183,6 +293,7 @@ def process_frame(frame):
 
     if op.multi_hand_landmarks:
         for hand in op.multi_hand_landmarks:
+            mp_drawing.draw_landmarks(frm, hand, mp_hands.HAND_CONNECTIONS)
             # 주먹 제스처 인식하여 타이머 시작
             if is_fist(hand) and not timer_running:
                 start_time = time.time()
@@ -259,7 +370,7 @@ def process_frame(frame):
                 cv.circle(pointer_layer, (x, y), thick_highlighter // 2, (0, 255, 255), 2)
             elif curr_tool == "draw":
                 cv.circle(pointer_layer, (x, y), thick_pen // 2, (0, 0, 255), 2)
-            elif curr_tool == "enlarge" or curr_tool == "select_move":
+            elif curr_tool == "crop" or curr_tool == "select_move":
                 size_rect = 10
                 cv.rectangle(pointer_layer, (x - size_rect // 2, y - size_rect // 2),
                              (x + size_rect // 2, y + size_rect // 2), (0, 255, 255), 2)
@@ -285,77 +396,7 @@ def process_frame(frame):
 
             # crop 도구 부분 수정
             elif curr_tool == "crop":
-                if fingers_up_status:
-                    if not var_inits:
-                        xii, yii = x, y
-                        var_inits = True
-                    cv.rectangle(slide_image_copy, (xii, yii), (x, y), (0, 255, 255), 2)
-                else:
-                    if var_inits:
-                        x_start, x_end = min(xii, x), max(xii, x)
-                        y_start, y_end = min(yii, y), max(yii, y)
-                        selected_area = slide_image[y_start:y_end, x_start:x_end]
-
-                        if selected_area.size != 0:
-                            current_cropped_image = selected_area.copy()  # 현재 크롭된 이미지 저장
-                            rotation_angle = 0  # 회전 각도 초기화
-                            cropped_images.append(current_cropped_image)
-                            cv.imshow("Additional Materials", current_cropped_image)
-                        var_inits = False
-
-                # 회전 제스처 감지
-                if current_cropped_image is not None:
-                    current_time = time.time()
-                    
-                    # 새로운 방향이 감지되면 타이머 시작
-                    if thumb_direction != "neutral" and thumb_direction != last_thumb_direction:
-                        rotation_start_time = current_time
-                        is_rotating = False
-                    
-                    # 같은 방향이 0.8초 이상 유지되면 회전 실행
-                    elif thumb_direction != "neutral" and thumb_direction == last_thumb_direction:
-                        if current_time - rotation_start_time >= 0.8 and not is_rotating:
-                            is_rotating = True
-                            if thumb_direction == "right":
-                                # 시계 방향 90도 회전
-                                rotation_angle = (rotation_angle + 90) % 360
-                                matrix = cv.getRotationMatrix2D(
-                                    (current_cropped_image.shape[1]/2, current_cropped_image.shape[0]/2),
-                                    -rotation_angle, 
-                                    1.0
-                                )
-                                rotated = cv.warpAffine(
-                                    current_cropped_image, 
-                                    matrix,
-                                    (current_cropped_image.shape[1], current_cropped_image.shape[0])
-                                )
-                                cv.imshow("Additional Materials", rotated)
-                                # 마지막 크롭 이미지 업데이트
-                                cropped_images[-1] = rotated
-                                
-                            elif thumb_direction == "left":
-                                # 반시계 방향 90도 회전
-                                rotation_angle = (rotation_angle - 90) % 360
-                                matrix = cv.getRotationMatrix2D(
-                                    (current_cropped_image.shape[1]/2, current_cropped_image.shape[0]/2),
-                                    -rotation_angle,
-                                    1.0
-                                )
-                                rotated = cv.warpAffine(
-                                    current_cropped_image,
-                                    matrix,
-                                    (current_cropped_image.shape[1], current_cropped_image.shape[0])
-                                )
-                                cv.imshow("Additional Materials", rotated)
-                                # 마지막 크롭 이미지 업데이트
-                                cropped_images[-1] = rotated
-                    
-                    # 방향이 중립이면 타이머 리셋
-                    elif thumb_direction == "neutral":
-                        rotation_start_time = current_time
-                        is_rotating = False
-                    
-                    last_thumb_direction = thumb_direction # 현재 방향을 이전 방향으로 저장
+                process_crop_tool(hand, x, y)
 
             elif curr_tool == "select_move":
                 if not selection_done:
@@ -688,7 +729,7 @@ while True:
         2,
     )
 
-    if show_summary and cropped_images:
+    if show_summary and summary_images:
         # 슬라이드 이미지 리사이즈 (600*800)
         slide_display = cv.resize(slide_image_copy, (800, 600))
         
@@ -701,7 +742,7 @@ while True:
         section_width = summary_width // 4
         
         # 최대 4개의 이미지 표시
-        for idx, img in enumerate(cropped_images[-4:]):  # 최근 4개만 표시
+        for idx, img in enumerate(summary_images[-4:]):  # 최근 4개만 표시
             if img is None:
                 continue
                 
