@@ -1,0 +1,84 @@
+import cv2 as cv
+import mediapipe as mp
+import glob
+import time
+import math
+
+# Mediapipe 손 인식 초기화
+mp_hands = mp.solutions.hands
+mp_drawing = mp.solutions.drawing_utils
+
+hand_landmark = mp_hands.Hands(
+    min_detection_confidence=0.8,
+    min_tracking_confidence=0.8,
+    max_num_hands=1
+)
+
+# 이미지 파일 불러오기
+img_files = sorted(glob.glob('./images/*.jpg'))
+current_slide = 0
+slide_image = cv.imread(img_files[current_slide])
+if slide_image is None:
+    print(f"이미지를 로드할 수 없습니다: {img_files[current_slide]}")
+    exit()
+
+# 엄지 각도를 계산하는 함수
+def calculate_thumb_angle(hand_landmarks):
+    thumb_tip = hand_landmarks.landmark[4]  # 엄지 끝
+    thumb_mcp = hand_landmarks.landmark[2]  # 엄지 관절
+    dx = thumb_tip.x - thumb_mcp.x
+    dy = thumb_tip.y - thumb_mcp.y
+    angle = math.degrees(math.atan2(dy, dx))  # 각도를 계산 (단위: 도)
+    return abs(angle)  # 절대값 반환 (양수로 처리)
+
+cap = cv.VideoCapture(0)
+last_slide_time = 0  # 슬라이드 이동 간 딜레이를 위한 시간 변수
+slow_delay = 1.0  # 천천히 슬라이드 이동 (초)
+fast_delay = 0.2  # 빠르게 슬라이드 이동 (초)
+
+while cap.isOpened():
+    ret, frame = cap.read()
+    if not ret:
+        break
+    frame = cv.flip(frame, 1)  # 좌우 반전 (거울 모드)
+    rgb = cv.cvtColor(frame, cv.COLOR_BGR2RGB)
+
+    op = hand_landmark.process(rgb)
+    current_time = time.time()
+
+    if op.multi_hand_landmarks:
+        for hand_landmarks in op.multi_hand_landmarks:
+            mp_drawing.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+
+            # 엄지 각도 계산
+            thumb_angle = calculate_thumb_angle(hand_landmarks)
+
+            # 슬라이드 이동 속도 결정
+            slide_delay = slow_delay if 135 >= thumb_angle >= 45  else fast_delay
+
+            # 슬라이드 이동
+            if current_time - last_slide_time > slide_delay:  # 딜레이 체크
+                thumb_direction = hand_landmarks.landmark[4].x - hand_landmarks.landmark[2].x  # x축 방향 차이
+
+                if thumb_direction > 0.05:  # 엄지가 오른쪽으로 향할 때
+                    current_slide = (current_slide + 1) % len(img_files)
+                    print(f"오른쪽 슬라이드로 이동 (각도: {thumb_angle:.2f}°, 딜레이: {slide_delay:.2f}s)")
+                    last_slide_time = current_time
+
+                elif thumb_direction < -0.05:  # 엄지가 왼쪽으로 향할 때
+                    current_slide = (current_slide - 1) % len(img_files)
+                    print(f"왼쪽 슬라이드로 이동 (각도: {thumb_angle:.2f}°, 딜레이: {slide_delay:.2f}s)")
+                    last_slide_time = current_time
+
+    # 슬라이드 이미지 표시
+    slide_image = cv.imread(img_files[current_slide])
+    slide_image_resized = cv.resize(slide_image, (640, 480))
+    cv.imshow("Lecture", slide_image_resized)
+    cv.imshow("Webcam", frame)
+
+    key = cv.waitKey(1) & 0xFF
+    if key == 27:  # ESC 키로 종료
+        break
+
+cap.release()
+cv.destroyAllWindows()
