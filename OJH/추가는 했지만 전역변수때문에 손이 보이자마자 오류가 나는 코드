@@ -100,9 +100,10 @@ pinch_count = 0
 selected_summary_index = -1  # summary 이미지 선택을 위한 인덱스
 moving_summary = False        # summary 이동 중인지 여부
 moving_summary_index = -1     # 이동 중인 summary의 인덱스
-pinch_active = False
 pinch_delay = 0.5  # 핀치 간 최소 딜레이(초)
-pinch_held = False  # 핀치 유지 상태 확인
+pinch_active = False
+pinch_held = False
+
 
 # 크롭 도구 관련 전역 변수
 crop_start_point = None
@@ -320,6 +321,9 @@ def process_frame(frame):
     global rotation_start_time, rotation_delay
     global should_close_rotating_window
     global moving_summary, moving_summary_index
+    global pinch_active, pinch_held
+    global current_x_pos, initial_x_pos
+    global current_slide
 
     current_time = time.time()
     rgb = cv.cvtColor(frame, cv.COLOR_BGR2RGB)
@@ -405,10 +409,10 @@ def process_frame(frame):
                             initial_x_pos = current_x_pos
                 
             else:
-                if pinch_held:  # 핀치를 놓았을 때 상태 초기화
+                if pinch_held :  # 핀치를 놓았을 때 상태 초기화
                     print("핀치 해제: 상태 초기화")
                     pinch_held = False
-                if pinch_active:  # 슬라이드 상태도 초기화
+                if pinch_active :  # 슬라이드 상태도 초기화
                     pinch_active = False
                     pinch_count = 0
             
