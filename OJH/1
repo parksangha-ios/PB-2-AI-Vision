@@ -1,0 +1,97 @@
+import cv2 as cv
+import mediapipe as mp
+import glob
+import time
+
+# Mediapipe 손 인식 초기화
+mp_hands = mp.solutions.hands
+mp_drawing = mp.solutions.drawing_utils
+
+hand_landmark = mp_hands.Hands(
+    min_detection_confidence=0.8,
+    min_tracking_confidence=0.8,
+    max_num_hands=1
+)
+
+img_files = sorted(glob.glob('./images/*.jpg'))
+current_slide = 0
+slide_image = cv.imread(img_files[current_slide])
+if slide_image is None:
+    print(f"이미지를 로드할 수 없습니다: {img_files[current_slide]}")
+    exit()
+
+# 핀치 감지 관련 변수
+pinch_count = 0
+pinch_active = False
+last_pinch_time = 0  # 핀치 간 딜레이를 위한 시간 변수
+pinch_delay = 0.5  # 핀치 간 최소 딜레이(초)
+pinch_held = False  # 핀치 유지 상태 확인
+
+# 핀치 제스처 확인 함수
+def check_pinch_gesture(hand_landmarks):
+    thumb_tip = hand_landmarks.landmark[4]
+    index_tip = hand_landmarks.landmark[8]
+    distance = ((thumb_tip.x - index_tip.x)**2 + (thumb_tip.y - index_tip.y)**2)**0.5
+    return distance < 0.07  # 핀치 거리 임계값
+
+cap = cv.VideoCapture(0)
+
+while cap.isOpened():
+    ret, frame = cap.read()
+    if not ret:
+        break
+    frame = cv.flip(frame, 1)
+    rgb = cv.cvtColor(frame, cv.COLOR_BGR2RGB)
+
+    op = hand_landmark.process(rgb)
+    current_time = time.time()
+
+    if op.multi_hand_landmarks:
+        for hand_landmarks in op.multi_hand_landmarks:
+            mp_drawing.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+
+            if check_pinch_gesture(hand_landmarks):
+                if not pinch_held:  # 핀치가 새롭게 인식될 때만 실행
+                    if pinch_count == 0:  # 첫 번째 핀치 상태 감지
+                        print("첫 번째 핀치: 준비 상태")
+                        pinch_count = 1
+                        last_pinch_time = current_time
+                        initial_x_pos = hand_landmarks.landmark[9].x
+                        pinch_held = True  # 핀치 상태 유지
+
+                    elif pinch_count == 1 and (current_time - last_pinch_time) > pinch_delay:  # 딜레이 이후 두 번째 핀치 감지
+                        print("두 번째 핀치: 슬라이드 이동 활성화")
+                        pinch_active = True
+                        pinch_count = 2
+
+                    elif pinch_active:  # 슬라이드 이동 감지 (두 번째 핀치 상태에서만 실행)
+                        current_x_pos = hand_landmarks.landmark[9].x
+                        if current_x_pos - initial_x_pos > 0.03:  # 오른쪽 이동
+                            current_slide = (current_slide + 1) % len(img_files)
+                            print("오른쪽 슬라이드로 이동")
+                            initial_x_pos = current_x_pos  # 현재 위치를 초기화
+                        elif current_x_pos - initial_x_pos < -0.03:  # 왼쪽 이동
+                            current_slide = (current_slide - 1) % len(img_files)
+                            print("왼쪽 슬라이드로 이동")
+                            initial_x_pos = current_x_pos
+                
+            else:
+                if pinch_held:  # 핀치를 놓았을 때 상태 초기화
+                    print("핀치 해제: 상태 초기화")
+                    pinch_held = False
+                if pinch_active:  # 슬라이드 상태도 초기화
+                    pinch_active = False
+                    pinch_count = 0
+
+    # 슬라이드 이미지 표시
+    slide_image = cv.imread(img_files[current_slide])
+    slide_image_resized = cv.resize(slide_image, (640, 480))
+    cv.imshow("Lecture", slide_image_resized)
+    cv.imshow("Webcam", frame)
+
+    key = cv.waitKey(1) & 0xFF
+    if key == 27:  # ESC 키로 종료
+        break
+
+cap.release()
+cv.destroyAllWindows()
