@@ -42,8 +42,8 @@ var_inits = False
 prevx, prevy = 0, 0
 
 thick_pen = 4
-thick_highlighter = 20
-thick_erase = 30
+thick_highlighter = 30
+thick_erase = 25
 
 selection_done = False
 selected_area_pen = None
@@ -83,8 +83,8 @@ def calculate_thumb_angle(hand_landmarks):
     return abs(angle)  # 절대값 반환 (양수로 처리)
 
 last_slide_time = 0  # 슬라이드 이동 간 딜레이를 위한 시간 변수
-slow_delay = 1.0  # 천천히 슬라이드 이동 (초)
-fast_delay = 0.2  # 빠르게 슬라이드 이동 (초)
+slow_delay = 1.3  # 천천히 슬라이드 이동 (초)
+fast_delay = 0.1  # 빠르게 슬라이드 이동 (초)
 
 
 def get_tool(x):
@@ -243,7 +243,26 @@ def process_crop_tool(hand, x, y, fx=1.0, fy=1.0, tool_type="crop"):
                 x_end, y_end = max(crop_start_point[0], crop_end_point[0]), max(crop_start_point[1], crop_end_point[1])
 
                 if 0 <= y_start < y_end <= canvas_size[1] and 0 <= x_start < x_end <= canvas_size[0]:
-                    cropped_area = slide_image_copy[y_start:y_end, x_start:x_end].copy()
+                    combined_image = slide_image_copy.copy()
+                    
+                    # pen_layer 합성
+                    b_pen, g_pen, r_pen, a_pen = cv.split(pen_layer)
+                    overlay_color_pen = cv.merge((b_pen, g_pen, r_pen))
+                    mask_pen = a_pen
+                    cv.copyTo(overlay_color_pen, mask_pen, combined_image)
+
+                    # highlight_layer 합성
+                    alpha_value = 0.4
+                    b_h, g_h, r_h, a_h = cv.split(highlight_layer)
+                    overlay_highlight = cv.merge((b_h, g_h, r_h))
+                    _, mask_highlight = cv.threshold(a_h, 0, 255, cv.THRESH_BINARY)
+                    slide_highlight_region = cv.bitwise_and(combined_image, combined_image, mask=mask_highlight)
+                    highlight_blend = cv.addWeighted(overlay_highlight, alpha_value, slide_highlight_region, 1 - alpha_value, 0)
+                    inv_mask_highlight = cv.bitwise_not(mask_highlight)
+                    combined_image = cv.bitwise_and(combined_image, combined_image, mask=inv_mask_highlight)
+                    combined_image = cv.add(combined_image, highlight_blend)
+                    
+                    cropped_area = combined_image[y_start:y_end, x_start:x_end].copy()
 
                     if cropped_area.size == 0:
                         print("Invalid area selection.")
