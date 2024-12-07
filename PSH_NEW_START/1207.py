@@ -500,8 +500,98 @@ def process_frame(frame):
             elif curr_tool == "shrink":
                 process_crop_tool(hand, x, y, fx=0.5, fy=0.5, tool_type="shrink")
             elif curr_tool == "select_move":
-                # ... 기존 select_move 로직 그대로 ...
-                pass
+                if not selection_done:
+                    if time.time() > selection_cooldown:
+                        if fingers_up_status:
+                            if not var_inits:
+                                x1, y1 = x, y
+                                var_inits = True
+                            else:
+                                rect_start = (x1, y1)
+                                rect_end = (x, y)
+                                thickness = 2
+                                line_type = cv.LINE_AA
+                                color = (255, 255, 0)
+                                dash_length = 10
+                                x_min, x_max = min(x1, x), max(x1, x)
+                                y_min, y_max = min(y1, y), max(y1, y)
+                                for i in range(x_min, x_max, dash_length * 2):
+                                    cv.line(slide_image_copy, (i, y_min), (i + dash_length, y_min), color, thickness, line_type)
+                                    cv.line(slide_image_copy, (i, y_max), (i + dash_length, y_max), color, thickness, line_type)
+                                for i in range(y_min, y_max, dash_length * 2):
+                                    cv.line(slide_image_copy, (x_min, i), (x_min, i + dash_length), color, thickness, line_type)
+                                    cv.line(slide_image_copy, (x_max, i), (x_max, i + dash_length), color, thickness, line_type)
+                        elif index_up and not middle_up:
+                            if var_inits:
+                                x_start, x_end = min(x1, x), max(x1, x)
+                                y_start, y_end = min(y1, y), max(y1, y)
+                                selected_area_pen = pen_layer[y_start:y_end, x_start:x_end].copy()
+                                selected_area_highlight = highlight_layer[y_start:y_end, x_start:x_end].copy()
+                                x_offset = x_start
+                                y_offset = y_start
+                                selection_done = True
+                                var_inits = False
+                                print("Selection completed. Switched to move mode.")
+                                pen_layer[y_start:y_end, x_start:x_end] = 0
+                                highlight_layer[y_start:y_end, x_start:x_end] = 0
+                else:
+                    if index_up and not middle_up:
+                        if selected_area_pen is not None:
+                            w = selected_area_pen.shape[1]
+                            h = selected_area_pen.shape[0]
+                        elif selected_area_highlight is not None:
+                            w = selected_area_highlight.shape[1]
+                            h = selected_area_highlight.shape[0]
+                        else:
+                            w = h = 0
+                        x_offset = x - w // 2
+                        y_offset = y - h // 2
+                    elif fingers_up_status:
+                        if selected_area_pen is not None:
+                            h_pen, w_pen = selected_area_pen.shape[:2]
+                            x1_dst_pen = max(0, x_offset)
+                            y1_dst_pen = max(0, y_offset)
+                            x2_dst_pen = min(canvas_size[0], x_offset + w_pen)
+                            y2_dst_pen = min(canvas_size[1], y_offset + h_pen)
+
+                            x1_src_pen = x1_dst_pen - x_offset
+                            y1_src_pen = y1_dst_pen - y_offset
+                            x2_src_pen = x1_src_pen + (x2_dst_pen - x1_dst_pen)
+                            y2_src_pen = y1_src_pen + (y2_dst_pen - y1_dst_pen)
+
+                            selected_area_moved_pen = selected_area_pen[y1_src_pen:y2_src_pen, x1_src_pen:x2_src_pen]
+                            b_pen, g_pen, r_pen, a_pen = cv.split(selected_area_moved_pen)
+                            mask_pen = a_pen
+                            cv.copyTo(selected_area_moved_pen, mask_pen, pen_layer[y1_dst_pen:y2_dst_pen, x1_dst_pen:x2_dst_pen])
+
+                        if selected_area_highlight is not None:
+                            h_highlight, w_highlight = selected_area_highlight.shape[:2]
+                            x1_dst_highlight = max(0, x_offset)
+                            y1_dst_highlight = max(0, y_offset)
+                            x2_dst_highlight = min(canvas_size[0], x_offset + w_highlight)
+                            y2_dst_highlight = min(canvas_size[1], y_offset + h_highlight)
+
+                            x1_src_highlight = x1_dst_highlight - x_offset
+                            y1_src_highlight = y1_dst_highlight - y_offset
+                            x2_src_highlight = x1_src_highlight + (x2_dst_highlight - x1_dst_highlight)
+                            y2_src_highlight = y1_src_highlight + (y2_dst_highlight - y1_dst_highlight)
+
+                            selected_area_moved_highlight = selected_area_highlight[y1_src_highlight:y2_src_highlight, x1_src_highlight:x2_src_highlight]
+                            b_highlight, g_highlight, r_highlight, a_highlight = cv.split(selected_area_moved_highlight)
+                            mask_highlight = a_highlight
+                            cv.copyTo(selected_area_moved_highlight, mask_highlight, highlight_layer[y1_dst_highlight:y2_dst_highlight, x1_dst_highlight:x2_dst_highlight])
+
+                        selected_area_pen = None
+                        selected_area_highlight = None
+                        selection_done = False
+                        var_inits = False
+                        selection_cooldown = time.time() + 0.8
+                        print("Position confirmed.")
+            elif curr_tool == "erase":
+                if fingers_up_status:
+                    cv.circle(pen_layer, (x, y), thick_erase, (0, 0, 0, 0), -1)
+                    cv.circle(highlight_layer, (x, y), thick_erase, (0, 0, 0, 0), -1)
+                    
 
             if curr_tool == "laser pointer" and check_pinch_gesture(hand):
                 summary_index = check_summary_area(x, y)
