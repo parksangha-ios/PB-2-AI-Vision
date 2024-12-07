@@ -3,6 +3,7 @@ import mediapipe as mp
 import glob
 import numpy as np
 import time
+import math
 
 # Mediapipe 손 인식 초기화
 mp_hands = mp.solutions.hands
@@ -15,7 +16,7 @@ hand_landmark = mp_hands.Hands(
 )
 
 # 슬라이드 이미지 로드
-img_files = sorted(glob.glob('lecture.png'))
+img_files = sorted(glob.glob('./images/*.jpg'))
 if not img_files:
     print("No slide images found.")
     exit()
@@ -65,11 +66,26 @@ COLOR_SECTIONS = {
     "black": ((580, 25), (0, 0, 0))
 }
 
+
 def draw_color_circles(image):
     for color, (center, bgr_color) in COLOR_SECTIONS.items():
         cv.circle(image, center, 20, bgr_color, -1)
-
 draw_color_circles(slide_image)
+
+
+#이미지 슬라이드 관련 함수 및 변수
+def calculate_thumb_angle(hand_landmarks):
+    thumb_tip = hand_landmarks.landmark[4]  # 엄지 끝
+    thumb_mcp = hand_landmarks.landmark[2]  # 엄지 관절
+    dx = thumb_tip.x - thumb_mcp.x
+    dy = thumb_tip.y - thumb_mcp.y
+    angle = math.degrees(math.atan2(dy, dx))  # 각도를 계산 (단위: 도)
+    return abs(angle)  # 절대값 반환 (양수로 처리)
+
+last_slide_time = 0  # 슬라이드 이동 간 딜레이를 위한 시간 변수
+slow_delay = 1.0  # 천천히 슬라이드 이동 (초)
+fast_delay = 0.2  # 빠르게 슬라이드 이동 (초)
+
 
 def get_tool(x):
     if x < 50 + tool_margin_left:
@@ -314,6 +330,8 @@ xii, yii = 0, 0
 
 should_close_rotating_window = False
 
+erase_click_count = 0
+
 def process_frame(frame):
     global curr_tool, time_init, rad, var_inits, prevx, prevy
     global selection_done, selected_area_pen, selected_area_highlight
@@ -332,6 +350,9 @@ def process_frame(frame):
     global moving_summary, moving_summary_index
     global pen_layer, highlight_layer
     global mode_select_time, select_mode
+    global erase_click_count
+    global current_time, last_slide_time, slide_delay
+    global current_slide, slide_image
 
     current_time = time.time()
     rgb = cv.cvtColor(frame, cv.COLOR_BGR2RGB)
@@ -623,6 +644,52 @@ while True:
         break
     frm = cv.flip(frm, 1)
     frm = cv.resize(frm, canvas_size)
+    op = hand_landmark.process(cv.cvtColor(frm, cv.COLOR_BGR2RGB))
+    
+    if op.multi_hand_landmarks and op.multi_handedness:
+        for i, hand_landmarks in enumerate(op.multi_hand_landmarks):
+            # 손의 좌우 확인
+            handedness_label = op.multi_handedness[i].classification[0].label
+            if handedness_label == "Left":  # 왼손만 동작 처리
+                mp_drawing.draw_landmarks(frm, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+
+                # 엄지 각도 계산
+                thumb_angle = calculate_thumb_angle(hand_landmarks)
+                slide_delay = slow_delay if 135 >= thumb_angle >= 45 else fast_delay
+
+                # 딜레이가 지난 경우만 슬라이드 이동
+                if current_time - last_slide_time > slide_delay:
+                    thumb_direction = hand_landmarks.landmark[4].x - hand_landmarks.landmark[2].x  # 엄지 방향 차이
+
+                    if thumb_direction > 0.05:  # 엄지가 오른쪽으로 이동
+                        if current_slide < len(img_files) - 1:
+                            slide_pen_layers[current_slide] = pen_layer.copy()
+                            slide_highlight_layers[current_slide] = highlight_layer.copy()
+                            current_slide += 1
+                            slide_image = cv.imread(img_files[current_slide])
+                            slide_image = cv.resize(slide_image, canvas_size)
+                            pen_layer = slide_pen_layers[current_slide].copy()
+                            highlight_layer = slide_highlight_layers[current_slide].copy() # slide_image_current 업데이트
+                            print(f"왼손 인식: 오른쪽 슬라이드로 이동 (슬라이드 {current_slide + 1}/{len(img_files)})")
+                            last_slide_time = current_time
+                            # 색상 원 다시 그리기
+                            draw_color_circles(slide_image)
+
+                    elif thumb_direction < -0.05:  # 엄지가 왼쪽으로 이동
+                        if current_slide > 0:
+                            slide_pen_layers[current_slide] = pen_layer.copy()
+                            slide_highlight_layers[current_slide] = highlight_layer.copy()
+                            current_slide -= 1
+                            slide_image = cv.imread(img_files[current_slide])
+                            slide_image = cv.resize(slide_image, canvas_size)
+                            pen_layer = slide_pen_layers[current_slide].copy()
+                            highlight_layer = slide_highlight_layers[current_slide].copy() # slide_image_current 업데이트
+                            print(f"왼손 인식: 왼쪽 슬라이드로 이동 (슬라이드 {current_slide + 1}/{len(img_files)})")
+                            last_slide_time = current_time
+                            draw_color_circles(slide_image)
+            else:
+                print("오른손 인식: 슬라이드 동작 없음")
+
 
     if mode == 'lecture':
         slide_image_current = slide_image.copy()
@@ -803,37 +870,7 @@ while True:
     key = cv.waitKey(5) & 0xFF
     if key == 27:
         break
-    elif key == ord('u'):
-        if current_slide < total_slides - 1:
-            slide_pen_layers[current_slide] = pen_layer.copy()
-            slide_highlight_layers[current_slide] = highlight_layer.copy()
-
-            current_slide += 1
-            slide_image = cv.imread(img_files[current_slide])
-            slide_image = cv.resize(slide_image, canvas_size)
-
-            pen_layer = slide_pen_layers[current_slide].copy()
-            highlight_layer = slide_highlight_layers[current_slide].copy()
-
-            draw_color_circles(slide_image)
-
-            print(f"Switched to slide {current_slide + 1}/{total_slides}.")
-    elif key == ord('d'):
-        if current_slide > 0:
-            slide_pen_layers[current_slide] = pen_layer.copy()
-            slide_highlight_layers[current_slide] = highlight_layer.copy()
-
-            current_slide -= 1
-            slide_image = cv.imread(img_files[current_slide])
-            slide_image = cv.resize(slide_image, canvas_size)
-
-            pen_layer = slide_pen_layers[current_slide].copy()
-            highlight_layer = slide_highlight_layers[current_slide].copy()
-
-            draw_color_circles(slide_image)
-
-            print(f"Switched to slide {current_slide + 1}/{total_slides}.")
-
+    
     if should_close_rotating_window:
         cv.destroyWindow("Rotating Image")
         should_close_rotating_window = False
